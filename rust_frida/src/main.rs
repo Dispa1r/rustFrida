@@ -10,6 +10,7 @@ mod repl;
 mod selinux;
 mod spawn;
 mod types;
+mod wxshadow;
 
 use crate::logger::{DIM, RESET};
 use args::Args;
@@ -28,6 +29,7 @@ use rustyline::Editor;
 use std::os::unix::io::RawFd;
 use std::sync::atomic::Ordering;
 use types::get_string_table_names;
+use wxshadow::SyncResult;
 
 fn main() {
     // Fix #8: 先解析参数（--help/--version 在此退出），再打印 banner
@@ -36,6 +38,22 @@ fn main() {
 
     // 初始化 verbose 模式
     logger::VERBOSE.store(args.verbose, Ordering::Relaxed);
+
+    match wxshadow::auto_sync_offsets() {
+        Ok(SyncResult::Synced { vm_mm, pgd }) => {
+            log_info!(
+                "wxshadow offsets synced automatically: vm_area_struct.vm_mm=0x{:x}, mm_struct.pgd=0x{:x}",
+                vm_mm,
+                pgd
+            );
+        }
+        Ok(SyncResult::NotAvailable) => {
+            log_verbose!("wxshadow offset sync skipped: kernel module not available");
+        }
+        Err(err) => {
+            log_warn!("wxshadow offset sync failed: {}", err);
+        }
+    }
 
     // 解析 --name 到 PID（如果指定）
     let resolved_pid: Option<i32> = if let Some(ref name) = args.name {
