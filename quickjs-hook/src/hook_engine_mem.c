@@ -616,10 +616,10 @@ int patch_target(void* target, void* jump_dest, int stealth, HookEntry* entry) {
 }
 
 void finalize_hook(HookEntry* entry, void* thunk, size_t thunk_size) {
-    /* Flush caches */
-    if (!entry->stealth) {
-        hook_flush_cache(entry->target, MIN_HOOK_SIZE);
-    }
+    /* Flush caches — always flush target even for stealth (wxshadow).
+     * The kernel's PTE switch flushes TLB but NOT I-cache, so stale
+     * instructions may still be cached from before the shadow page swap. */
+    hook_flush_cache(entry->target, MIN_HOOK_SIZE);
     hook_flush_cache(entry->trampoline, TRAMPOLINE_ALLOC_SIZE);
     if (thunk && thunk_size > 0) {
         hook_flush_cache(thunk, thunk_size);
