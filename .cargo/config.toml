@@ -16,11 +16,13 @@
 target = "aarch64-linux-android"
 
 [target.aarch64-linux-android]
-linker = "/home/wwb/Android/Sdk/ndk/25.0.8775105/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
-ar = "/home/wwb/Android/Sdk/ndk/25.0.8775105/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-rustflags = ["-l","clang_rt.builtins-aarch64","-L","/home/wwb/Android/Sdk/ndk/25.0.8775105/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/14.0.6/lib/baremetal"]
+linker = "/Users/luyiren/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android33-clang"
+ar = "/Users/luyiren/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
+rustflags = ["-l","clang_rt.builtins-aarch64-android","-L","/Users/luyiren/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/lib/clang/18/lib/linux"]
 
 [env]
-CC_aarch64-linux-android = "/home/wwb/Android/Sdk/ndk/25.0.8775105/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
-#CFLAGS_aarch64-linux-android = "--sysroot=/home/wwb/Android/Sdk/ndk/25.0.8775105/toolchains/llvm/prebuilt/linux-x86_64/sysroot/"
-BINDGEN_EXTRA_CLANG_ARGS = "--sysroot=/home/wwb/Android/Sdk/ndk/25.0.8775105/toolchains/llvm/prebuilt/linux-x86_64/sysroot/"
+CC_aarch64-linux-android = "/Users/luyiren/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android33-clang"
+AR = "/Users/luyiren/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
+TARGET_AR = "/Users/luyiren/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
+#CFLAGS_aarch64-linux-android = "--sysroot=/Users/luyiren/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/"
+BINDGEN_EXTRA_CLANG_ARGS = "--sysroot=/Users/luyiren/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/"

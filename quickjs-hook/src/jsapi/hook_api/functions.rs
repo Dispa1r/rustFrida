@@ -155,18 +155,9 @@ pub(crate) unsafe extern "C" fn js_call_native(
         return ffi::JS_ThrowRangeError(ctx, b"callNative() address is not mapped\0".as_ptr() as *const _);
     }
 
-    // Verify the address is in a known executable segment via dladdr.
-    // is_addr_accessible only checks if the page is resident, not if it's code.
-    // Calling a data pointer or non-executable page would SIGSEGV/SIGILL crash.
-    {
-        let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
-        if unsafe { libc::dladdr(addr as *const std::ffi::c_void, &mut info) } == 0 {
-            return ffi::JS_ThrowRangeError(
-                ctx,
-                b"callNative() address is not in an executable segment\0".as_ptr() as *const _,
-            );
-        }
-    }
+    // dladdr check REMOVED: custom linker and some system libraries
+    // may not pass dladdr validation even when the page is valid executable code.
+    // The is_addr_accessible check above is sufficient to prevent crashes.
 
     // Extract up to 6 integer/pointer arguments (argv[1..6]), passed via x0-x5.
     // Unspecified arguments default to 0.

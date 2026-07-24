@@ -110,7 +110,7 @@ pub struct AgentArgs {
 pub extern "C" fn hello_entry(args_ptr: *mut c_void) -> *mut c_void {
     // 安装Rust panic hook（需要在最前面，捕获Rust层面的panic）
     install_panic_hook();
-    install_crash_handlers();
+    // install_crash_handlers();  // 和游戏 CrashSight SDK 冲突，移除
 
     // 从 AgentArgs 读取 ctrl_fd 和 StringTable 指针
     let (ctrl_fd, table) = unsafe {

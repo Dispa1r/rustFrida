@@ -46,7 +46,7 @@ struct WxshadowOffsetSync {
 }
 
 pub(crate) enum SyncResult {
-    Synced { vm_mm: i16, pgd: i16 },
+    Synced { vm_mm: i16, pgd: Option<i16> },
     NotAvailable,
 }
 
@@ -182,14 +182,19 @@ pub(crate) fn auto_sync_offsets() -> Result<SyncResult, String> {
     };
 
     let vm_mm = find_struct_member_offset(&blob, "vm_area_struct", "vm_mm")?;
-    let pgd = find_struct_member_offset(&blob, "mm_struct", "pgd")?;
+    let pgd = find_struct_member_offset(&blob, "mm_struct", "pgd").ok();
+
+    let mut flags = WXSHADOW_OFFSET_VALID_VM_MM;
+    if pgd.is_some() {
+        flags |= WXSHADOW_OFFSET_VALID_MM_PGD;
+    }
 
     let cfg = WxshadowOffsetSync {
         magic: WXSHADOW_OFFSET_SYNC_MAGIC,
         size: size_of::<WxshadowOffsetSync>() as u16,
-        flags: WXSHADOW_OFFSET_VALID_VM_MM | WXSHADOW_OFFSET_VALID_MM_PGD,
+        flags,
         vm_area_vm_mm_offset: vm_mm,
-        mm_struct_pgd_offset: pgd,
+        mm_struct_pgd_offset: pgd.unwrap_or_default(),
         reserved0: 0,
         reserved1: 0,
     };

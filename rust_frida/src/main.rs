@@ -41,11 +41,18 @@ fn main() {
 
     match wxshadow::auto_sync_offsets() {
         Ok(SyncResult::Synced { vm_mm, pgd }) => {
-            log_info!(
-                "wxshadow offsets synced automatically: vm_area_struct.vm_mm=0x{:x}, mm_struct.pgd=0x{:x}",
-                vm_mm,
-                pgd
-            );
+            if let Some(pgd) = pgd {
+                log_info!(
+                    "wxshadow offsets synced automatically: vm_area_struct.vm_mm=0x{:x}, mm_struct.pgd=0x{:x}",
+                    vm_mm,
+                    pgd
+                );
+            } else {
+                log_info!(
+                    "wxshadow offsets synced automatically: vm_area_struct.vm_mm=0x{:x} (mm_struct.pgd unavailable in BTF, keeping kernel value)",
+                    vm_mm
+                );
+            }
         }
         Ok(SyncResult::NotAvailable) => {
             log_verbose!("wxshadow offset sync skipped: kernel module not available");

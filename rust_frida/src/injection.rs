@@ -817,6 +817,7 @@ fn find_data_dir_by_uid(uid: u32) -> Option<String> {
 }
 
 /// 使用 eBPF 监听 SO 加载并自动附加
+#[cfg(feature = "ldmonitor")]
 pub(crate) fn watch_and_inject(
     so_pattern: &str,
     timeout_secs: Option<u64>,
@@ -883,4 +884,13 @@ pub(crate) fn watch_and_inject(
         }
         None => Err("监听超时，未检测到匹配的 SO 加载".to_string()),
     }
+}
+
+#[cfg(not(feature = "ldmonitor"))]
+pub(crate) fn watch_and_inject(
+    _so_pattern: &str,
+    _timeout_secs: Option<u64>,
+    _string_overrides: &std::collections::HashMap<String, String>,
+) -> Result<RawFd, String> {
+    Err("当前构建未启用 ldmonitor/watch-so（已跳过 eBPF 组件）".to_string())
 }

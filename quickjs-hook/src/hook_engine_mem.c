@@ -7,6 +7,10 @@
  */
 
 #include "hook_engine_internal.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/time.h>
 
 /* --- Page permission helpers --- */
 
@@ -198,40 +202,103 @@ static int pmd_split_cow(void* addr) {
  * Returns 0 on success, HOOK_ERROR_WXSHADOW_FAILED on failure.
  */
 int wxshadow_patch(void* addr, const void* buf, size_t len) {
-    int ret;
+    /* Try lsdriver HTTP bridge first (127.0.0.1:19494) */
+    {
+        char body[2048], http[2560];
+        int i, blen;
 
-    ret = prctl(PR_WXSHADOW_PATCH, 0, (uintptr_t)addr, (uintptr_t)buf, len);
-    if (ret != 0) {
-        ret = prctl(PR_WXSHADOW_PATCH, getpid(), (uintptr_t)addr, (uintptr_t)buf, len);
-    }
+        /* Build JSON body with data array */
+        blen = snprintf(body, sizeof(body),
+            "{\"operation\":\"wxshadow.patch\",\"params\":{"
+            "\"address\":\"0x%lx\",\"offset\":0,\"len\":%zu,"
+            "\"data\":[", (unsigned long)(uintptr_t)addr, len);
+        for (i = 0; i < (int)len && blen < (int)sizeof(body) - 12; i++) {
+            blen += snprintf(body + blen, sizeof(body) - blen, "%d%s",
+                ((unsigned char*)buf)[i], (i < (int)len - 1) ? "," : "");
+        }
+        snprintf(body + blen, sizeof(body) - blen, "]}}");
 
-    if (ret != 0) {
-        /* PATCH failed — likely 2MB section (PMD) mapping.
-         * wxshadow only supports 4KB PTE-mapped pages.
-         *
-         * Split the PMD by triggering COW on the target page.  We must
-         * mprotect the ENTIRE containing VMA (not just the target page)
-         * to avoid creating a VMA split visible in /proc/self/maps.
-         * V-OS detection scans /proc/self/maps for unexpected VMA splits
-         * in libart.so — mprotecting a sub-range would fragment the VMA. */
-        hook_log("wxshadow PATCH failed (errno=%d), trying PMD split + COW for addr=%p", errno, addr);
+        /* Wrap in HTTP POST */
+        snprintf(http, sizeof(http),
+            "POST /api/rpc HTTP/1.1\r\n"
+            "Host: 127.0.0.1:19494\r\n"
+            "Content-Type: application/json\r\n"
+            "Content-Length: %d\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "%s", (int)strlen(body), body);
 
-        if (pmd_split_cow(addr) == 0) {
-            ret = prctl(PR_WXSHADOW_PATCH, 0, (uintptr_t)addr, (uintptr_t)buf, len);
-            if (ret != 0) {
-                ret = prctl(PR_WXSHADOW_PATCH, getpid(), (uintptr_t)addr, (uintptr_t)buf, len);
+        /* Step 1: send target.select on dedicated connection */
+        {
+            int tsock = socket(AF_INET, SOCK_STREAM, 0);
+            if (tsock >= 0) {
+                struct sockaddr_in sa = {0};
+                sa.sin_family = AF_INET;
+                sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                sa.sin_port = htons(19494);
+                struct timeval tv = {0, 300000};
+                setsockopt(tsock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                setsockopt(tsock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+                if (connect(tsock, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
+                    char tgt[256], tgt_body[128];
+                    int tgt_body_len = snprintf(tgt_body, sizeof(tgt_body),
+                        "{\"operation\":\"target.select\",\"params\":{\"pid\":%d}}", getpid());
+                    snprintf(tgt, sizeof(tgt),
+                        "POST /api/rpc HTTP/1.1\r\nHost: 127.0.0.1:19494\r\n"
+                        "Content-Type: application/json\r\nContent-Length: %d\r\n"
+                        "Connection: close\r\n\r\n"
+                        "%s", tgt_body_len, tgt_body);
+                    write(tsock, tgt, strlen(tgt));
+                    char tmp[1024]; read(tsock, tmp, sizeof(tmp)-1);
+                }
+                close(tsock);
             }
         }
 
-        if (ret != 0) {
-            hook_log("wxshadow PATCH failed after COW: addr=%p errno=%d", addr, errno);
-            return HOOK_ERROR_WXSHADOW_FAILED;
+        /* Step 2: send wxshadow.patch on a fresh connection */
+        {
+            int sock = socket(AF_INET, SOCK_STREAM, 0);
+            if (sock >= 0) {
+                struct sockaddr_in sa = {0};
+                sa.sin_family = AF_INET;
+                sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                sa.sin_port = htons(19494);
+                struct timeval tv = {0, 300000};
+                setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+                if (connect(sock, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
+                    write(sock, http, strlen(http));
+                    char resp[512] = {0};
+                    read(sock, resp, sizeof(resp) - 1);
+                    close(sock);
+                    if (strstr(resp, "\"ok\":true") || strstr(resp, "200 OK")) {
+                        hook_log("wxshadow HTTP patch OK: addr=%p len=%zu", addr, len);
+                        return 0;
+                    }
+                    hook_log("wxshadow HTTP resp: %.200s", resp);
+                } else { close(sock); }
+            }
         }
-        hook_log("wxshadow PATCH succeeded after PMD split: addr=%p", addr);
     }
 
-    hook_log("wxshadow stealth patch OK: addr=%p len=%zu", addr, len);
-    return 0;
+    /* Fallback: KPM prctl */
+    {
+        int ret = prctl(PR_WXSHADOW_PATCH, 0, (uintptr_t)addr, (uintptr_t)buf, len);
+        if (ret != 0)
+            ret = prctl(PR_WXSHADOW_PATCH, getpid(), (uintptr_t)addr, (uintptr_t)buf, len);
+        if (ret != 0) {
+            hook_log("wxshadow PATCH failed (errno=%d), PMD split...", errno);
+            if (pmd_split_cow(addr) == 0) {
+                ret = prctl(PR_WXSHADOW_PATCH, 0, (uintptr_t)addr, (uintptr_t)buf, len);
+                if (ret != 0)
+                    ret = prctl(PR_WXSHADOW_PATCH, getpid(), (uintptr_t)addr, (uintptr_t)buf, len);
+            }
+            if (ret != 0) { hook_log("wxshadow all failed"); return HOOK_ERROR_WXSHADOW_FAILED; }
+        }
+        return 0;
+    }
 }
 
 /*
@@ -239,15 +306,70 @@ int wxshadow_patch(void* addr, const void* buf, size_t len) {
  * The supplied address must match the addr argument previously passed to PATCH.
  */
 int wxshadow_release(void* addr) {
-    int ret = prctl(PR_WXSHADOW_RELEASE, 0, (uintptr_t)addr, 0, 0);
-    if (ret != 0) {
-        ret = prctl(PR_WXSHADOW_RELEASE, getpid(), (uintptr_t)addr, 0, 0);
+    /* Try lsdriver HTTP bridge first */
+    {
+        char body[256], http[512];
+        int blen = snprintf(body, sizeof(body),
+            "{\"operation\":\"wxshadow.release\",\"params\":{\"address\":\"0x%lx\"}}",
+            (unsigned long)(uintptr_t)addr);
+        snprintf(http, sizeof(http),
+            "POST /api/rpc HTTP/1.1\r\nHost: 127.0.0.1:19494\r\n"
+            "Content-Type: application/json\r\nContent-Length: %d\r\n"
+            "Connection: close\r\n\r\n%s", (int)strlen(body), body);
+
+        /* Step 1: send target.select on dedicated connection */
+        {
+            int tsock = socket(AF_INET, SOCK_STREAM, 0);
+            if (tsock >= 0) {
+                struct sockaddr_in sa = {0};
+                sa.sin_family = AF_INET; sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                sa.sin_port = htons(19494);
+                struct timeval tv = {0, 300000};
+                setsockopt(tsock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                setsockopt(tsock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+                if (connect(tsock, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
+                    char tgt[256], tgt_body[128];
+                    int tgt_body_len = snprintf(tgt_body, sizeof(tgt_body),
+                        "{\"operation\":\"target.select\",\"params\":{\"pid\":%d}}", getpid());
+                    snprintf(tgt, sizeof(tgt),
+                        "POST /api/rpc HTTP/1.1\r\nHost: 127.0.0.1:19494\r\n"
+                        "Content-Type: application/json\r\nContent-Length: %d\r\n"
+                        "Connection: close\r\n\r\n"
+                        "%s", tgt_body_len, tgt_body);
+                    write(tsock, tgt, strlen(tgt));
+                    char tmp[512]; read(tsock, tmp, sizeof(tmp)-1);
+                }
+                close(tsock);
+            }
+        }
+
+        /* Step 2: send wxshadow.release on a fresh connection */
+        {
+            int sock = socket(AF_INET, SOCK_STREAM, 0);
+            if (sock >= 0) {
+                struct sockaddr_in sa = {0};
+                sa.sin_family = AF_INET; sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                sa.sin_port = htons(19494);
+                struct timeval tv = {0, 300000};
+                setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+                if (connect(sock, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
+                    write(sock, http, strlen(http));
+                    char resp[256] = {0}; read(sock, resp, sizeof(resp)-1);
+                    close(sock);
+                    if (strstr(resp, "\"ok\":true") || strstr(resp, "200 OK")) {
+                        hook_log("wxshadow HTTP release OK: addr=%p", addr); return 0;
+                    }
+                    hook_log("wxshadow HTTP release resp: %.200s", resp);
+                } else { close(sock); }
+            }
+        }
     }
-    if (ret != 0) {
-        hook_log("wxshadow_release: failed for addr=%p (errno=%d)", addr, errno);
-        return HOOK_ERROR_WXSHADOW_FAILED;
-    }
-    return 0;
+    /* Fallback: KPM prctl */
+    { int ret = prctl(PR_WXSHADOW_RELEASE, 0, (uintptr_t)addr, 0, 0);
+      if (ret != 0) ret = prctl(PR_WXSHADOW_RELEASE, getpid(), (uintptr_t)addr, 0, 0);
+      if (ret != 0) return HOOK_ERROR_WXSHADOW_FAILED;
+      return 0; }
 }
 
 /* --- Jump writing and allocation --- */
