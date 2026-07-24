@@ -119,7 +119,20 @@ void free_entry(HookEntry* entry) {
 /* --- Cache flush --- */
 
 void hook_flush_cache(void* start, size_t size) {
-    __builtin___clear_cache((char*)start, (char*)start + size);
+    /* Use DC CIVAC (clean+invalidate to PoC) instead of DC CVAU (clean to PoU)
+     * to handle VIPT cache aliasing between kernel VA and user VA mappings.
+     * The kernel writes shadow page data via kernel linear map; DC CVAU from
+     * userspace may index a different cache set and miss the dirty lines.
+     * DC CIVAC writes all the way to DRAM (PoC), then IC IVAU re-fetches. */
+    uintptr_t addr = (uintptr_t)start & ~(uintptr_t)63; /* cache line aligned */
+    uintptr_t end = ((uintptr_t)start + size + 63) & ~(uintptr_t)63;
+    while (addr < end) {
+        __asm__ volatile("dc civac, %0" :: "r"(addr) : "memory");
+        __asm__ volatile("ic ivau, %0" :: "r"(addr) : "memory");
+        addr += 64;
+    }
+    __asm__ volatile("dsb ish" ::: "memory");
+    __asm__ volatile("isb" ::: "memory");
 }
 
 /* --- wxshadow (two-step shadow page patching) --- */
@@ -207,11 +220,15 @@ int wxshadow_patch(void* addr, const void* buf, size_t len) {
         char body[2048], http[2560];
         int i, blen;
 
-        /* Build JSON body with data array */
+        /* Build JSON body with data array.
+         * offset = addr & 0xFFF (within-page offset) — CRITICAL!
+         * The kernel handler masks addr to page base, then applies
+         * the patch at the given offset within the shadow page. */
         blen = snprintf(body, sizeof(body),
             "{\"operation\":\"wxshadow.patch\",\"params\":{"
-            "\"address\":\"0x%lx\",\"offset\":0,\"len\":%zu,"
-            "\"data\":[", (unsigned long)(uintptr_t)addr, len);
+            "\"address\":\"0x%lx\",\"offset\":%lu,\"len\":%zu,"
+            "\"data\":[", (unsigned long)(uintptr_t)addr,
+            (unsigned long)((uintptr_t)addr & 0xFFF), len);
         for (i = 0; i < (int)len && blen < (int)sizeof(body) - 12; i++) {
             blen += snprintf(body + blen, sizeof(body) - blen, "%d%s",
                 ((unsigned char*)buf)[i], (i < (int)len - 1) ? "," : "");
